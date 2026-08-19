@@ -1,0 +1,135 @@
+// Prisma schema for Mailsi Telehealth & Clinic Queue Platform
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String         @id @default(cuid())
+  phone         String         @unique
+  fullName      String
+  role          String         @default("PATIENT") // ADMIN, DOCTOR, PHARMACY_AGENT, CLINIC_STAFF, PATIENT
+  passwordHash  String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  doctorProfile DoctorProfile?
+  pharmacy      Pharmacy?
+  appointments  Appointment[]  @relation("PatientAppointments")
+}
+
+model DoctorProfile {
+  id                String         @id @default(cuid())
+  userId            String         @unique
+  user              User           @relation(fields: [userId], references: [id])
+  pmdcNumber        String?
+  specialization    String         // e.g. "Child Specialist", "Gynaecologist", "General Physician"
+  qualification     String         // e.g. "MBBS, FCPS"
+  city              String         // "Mailsi", "Multan", "Vehari"
+  hospitalOrClinic  String         // e.g. "THQ Mailsi / Private Clinic", "Fatima Medical Complex Multan"
+  consultationFee   Int            // e.g. 1000 (PKR)
+  isOnlineForOpd    Boolean        @default(false)
+  opdStartTime      String?        // e.g. "17:00"
+  opdEndTime        String?        // e.g. "20:00"
+  currentOpdToken   Int            @default(0)
+  totalTokensIssued Int            @default(0)
+  appointments      Appointment[]
+}
+
+model Pharmacy {
+  id                String         @id @default(cuid())
+  userId            String         @unique
+  user              User           @relation(fields: [userId], references: [id])
+  storeName         String         // e.g. "Al-Madina Medical Store"
+  ownerName         String
+  locationArea      String         // e.g. "Mitro", "Karampur", "Jallah Jeem", "Mailsi City"
+  distanceFromCity  Int            // km from Mailsi center (e.g. 18)
+  walletBalance     Float          @default(0.0) // Tracks net balance owed to platform
+  totalCommission   Float          @default(0.0) // Cumulative 7% earnings
+  creditLimit       Float          @default(5000.0) // Max cash hold limit before settlement
+  appointments      Appointment[]  @relation("ReferringPharmacy")
+  ledgerEntries     LedgerEntry[]
+}
+
+model Appointment {
+  id                String                @id @default(cuid())
+  tokenNumber       Int
+  appointmentDate   DateTime              @default(now())
+  type              String                @default("REMOTE_VIDEO") // REMOTE_VIDEO vs IN_CLINIC_PHYSICAL
+  status            String                @default("SCHEDULED")    // SCHEDULED, IN_PROGRESS, COMPLETED, etc.
+  mediaMode         String                @default("VIDEO_WEBRTC") // VIDEO_WEBRTC, VOIP_AUDIO_ONLY, ASYNC_VOICE_NOTES
+
+  // Participants
+  patientId         String
+  patient           User                  @relation("PatientAppointments", fields: [patientId], references: [id])
+  doctorId          String
+  doctor            DoctorProfile         @relation(fields: [doctorId], references: [id])
+  pharmacyId        String?
+  pharmacy          Pharmacy?             @relation("ReferringPharmacy", fields: [pharmacyId], references: [id])
+
+  // Triage & Vitals (Recorded by Pharmacy in < 60s)
+  bloodPressureSys  Int?                  // e.g. 120
+  bloodPressureDia  Int?                  // e.g. 80
+  bloodSugar        Int?                  // e.g. 140 mg/dL
+  temperature       Float?                // e.g. 99.4 F
+  pulseRate         Int?                  // e.g. 78 bpm
+  chiefComplaints   String?               // Tag list: "Fever, Chest congestion"
+  voiceNoteUrl      String?               // Audio clip from pharmacy triage
+  pastRxImages      String?               // JSON array of past prescription/report photos
+  patientVillage    String?               // Village name e.g. "Mitro"
+
+  // Fee & 88-7-5 Split
+  totalFee          Int                   // e.g. 1000
+  doctorShare       Int                   // 880 (88%)
+  pharmacyShare     Int                   // 70 (7%)
+  platformShare     Int                   // 50 (5%)
+  isPaidCash        Boolean               @default(true)
+
+  // Post-Consultation Output
+  prescription      Prescription?
+  inconsistencyLog  InconsistencyLog?
+
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+}
+
+model Prescription {
+  id                String         @id @default(cuid())
+  appointmentId     String         @unique
+  appointment       Appointment    @relation(fields: [appointmentId], references: [id])
+  isHandwrittenPad  Boolean        @default(false)
+  padPhotoUrl       String?        // Photo upload of official pad
+  diagnosis         String?
+  instructions      String?        // e.g. "Do baar khane ke baad"
+  medicinesJson     String?        // Structured JSON list of medicines, dose, duration
+  pdfUrl            String?        // Auto-generated printable PDF
+  isDispensed       Boolean        @default(false) // Marked by village pharmacy when sold
+  createdAt         DateTime       @default(now())
+}
+
+model InconsistencyLog {
+  id                String         @id @default(cuid())
+  appointmentId     String         @unique
+  appointment       Appointment    @relation(fields: [appointmentId], references: [id])
+  doctorDelayMins   Int            @default(0)
+  callDropCount     Int            @default(0)
+  switchedToVoice   Boolean        @default(false)
+  packetLossAvg     Float?
+  notes             String?
+  createdAt         DateTime       @default(now())
+}
+
+model LedgerEntry {
+  id                String         @id @default(cuid())
+  pharmacyId        String
+  pharmacy          Pharmacy       @relation(fields: [pharmacyId], references: [id])
+  amount            Float
+  type              String         // "COMMISSION_EARNED", "CASH_COLLECTED", "REMITTANCE_SETTLED"
+  description       String
+  createdAt         DateTime       @default(now())
+}
